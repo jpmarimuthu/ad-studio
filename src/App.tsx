@@ -1,4 +1,43 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+const COST_PER_GEN = 0.0002; // ~$0.0002 per Gemini generation
+
+interface UsageStats {
+  totalGenerations: number;
+  todayGenerations: number;
+  todayDate: string;
+  history: { date: string; count: number; product: string }[];
+}
+
+function loadUsage(): UsageStats {
+  try {
+    const raw = localStorage.getItem("adstudio_usage");
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { totalGenerations: 0, todayGenerations: 0, todayDate: "", history: [] };
+}
+
+function saveUsage(u: UsageStats) {
+  localStorage.setItem("adstudio_usage", JSON.stringify(u));
+}
+
+function todayStr() {
+  return new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function recordGeneration(product: string): UsageStats {
+  const u = loadUsage();
+  const today = todayStr();
+  const todayGenerations = u.todayDate === today ? u.todayGenerations + 1 : 1;
+  const updated: UsageStats = {
+    totalGenerations: u.totalGenerations + 1,
+    todayGenerations,
+    todayDate: today,
+    history: [{ date: today, count: 1, product }, ...u.history].slice(0, 50),
+  };
+  saveUsage(updated);
+  return updated;
+}
 
 const PRODUCTS = [
   "Body Shave / Razor",
@@ -94,9 +133,12 @@ export default function App() {
   const [rateLimited, setRateLimited] = useState(false);
   const [result, setResult] = useState<AdResult | null>(null);
   const [savedAds, setSavedAds] = useState<SavedAd[]>([]);
-  const [tab, setTab] = useState<"generate" | "saved">("generate");
+  const [tab, setTab] = useState<"generate" | "saved" | "usage">("generate");
   const [activeCarousel, setActiveCarousel] = useState(0);
   const [error, setError] = useState("");
+  const [usage, setUsage] = useState<UsageStats>(loadUsage);
+
+  useEffect(() => { setUsage(loadUsage()); }, []);
 
   const finalProduct = product === "Custom Product" ? customProduct : product;
   const finalAudience = audience === "Custom audience" ? customAudience : audience;
@@ -125,6 +167,7 @@ export default function App() {
       if (data.error) { setError(data.error); setLoading(false); return; }
       setResult(data);
       setActiveCarousel(0);
+      setUsage(recordGeneration(finalProduct));
     } catch {
       setError("Something went wrong. Please try again.");
     }
@@ -155,10 +198,10 @@ export default function App() {
           <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 1 }}>AI-Powered Meta Ad Copy Generator</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          {(["generate", "saved"] as const).map(t => (
+          {(["generate", "saved", "usage"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: tab === t ? "linear-gradient(135deg, #667eea, #764ba2)" : "#f1f5f9", color: tab === t ? "#fff" : "#64748b", fontWeight: 600, cursor: "pointer", fontSize: 13 }}>
-              {t === "generate" ? "Generate" : `Saved (${savedAds.length})`}
+              {t === "generate" ? "Generate" : t === "saved" ? `Saved (${savedAds.length})` : "Usage"}
             </button>
           ))}
         </div>
@@ -366,6 +409,78 @@ export default function App() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* USAGE TAB */}
+        {tab === "usage" && (
+          <div style={{ maxWidth: 600, margin: "0 auto" }}>
+            {/* Summary Cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 20 }}>
+              {[
+                { label: "Total Generations", value: usage.totalGenerations, icon: "⚡", color: "#667eea" },
+                { label: "Today", value: usage.todayGenerations, icon: "📅", color: "#10b981" },
+                { label: "Est. Total Cost", value: `$${(usage.totalGenerations * COST_PER_GEN).toFixed(4)}`, icon: "💰", color: "#f59e0b" },
+              ].map(({ label, value, icon, color }) => (
+                <div key={label} style={{ background: "#fff", borderRadius: 14, padding: 18, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                  <div style={{ fontSize: 28, marginBottom: 6 }}>{icon}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
+                  <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4, fontWeight: 600 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Cost breakdown */}
+            <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e2e8f0", marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginBottom: 14 }}>💡 Gemini API Cost Breakdown</div>
+              {[
+                { label: "Cost per generation", value: `$${COST_PER_GEN}` },
+                { label: "Free tier remaining today", value: `${Math.max(0, 500 - usage.todayGenerations)} / 500 requests` },
+                { label: "This month (est.)", value: `$${(usage.totalGenerations * COST_PER_GEN).toFixed(4)}` },
+                { label: "At 1,000 generations", value: "$0.20" },
+                { label: "At 10,000 generations", value: "$2.00" },
+              ].map(({ label, value }) => (
+                <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid #f1f5f9" }}>
+                  <span style={{ fontSize: 13, color: "#64748b" }}>{label}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>{value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Free tier progress */}
+            <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e2e8f0", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>Daily Free Tier Usage</span>
+                <span style={{ fontSize: 13, color: "#64748b" }}>{usage.todayGenerations} / 500</span>
+              </div>
+              <div style={{ background: "#f1f5f9", borderRadius: 20, height: 10, overflow: "hidden" }}>
+                <div style={{ width: `${Math.min(100, (usage.todayGenerations / 500) * 100)}%`, height: "100%", background: usage.todayGenerations > 400 ? "#ef4444" : usage.todayGenerations > 250 ? "#f59e0b" : "#10b981", borderRadius: 20, transition: "width 0.3s" }} />
+              </div>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>
+                {usage.todayGenerations < 500 ? `${500 - usage.todayGenerations} free requests remaining today` : "Daily free limit reached — paid tier active"}
+              </div>
+            </div>
+
+            {/* Recent history */}
+            <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e2e8f0", marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#1e293b", marginBottom: 12 }}>Recent Generations</div>
+              {usage.history.length === 0 ? (
+                <div style={{ fontSize: 13, color: "#94a3b8", textAlign: "center", padding: 20 }}>No generations yet</div>
+              ) : usage.history.slice(0, 10).map((h, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f1f5f9" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ fontSize: 16 }}>✨</span>
+                    <span style={{ fontSize: 13, color: "#1e293b" }}>{h.product}</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: "#94a3b8" }}>{h.date}</span>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={() => { localStorage.removeItem("adstudio_usage"); setUsage(loadUsage()); }}
+              style={{ width: "100%", padding: 12, borderRadius: 10, border: "1px solid #fecaca", background: "#fef2f2", color: "#ef4444", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+              Reset Usage Data
+            </button>
           </div>
         )}
 
